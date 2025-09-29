@@ -1,3 +1,6 @@
 # Intel Hex Loader Dependencies
 typing-extensions>=4.0.0
 
+# For PICO Loader serial communication
+pyserial>=3.5
+

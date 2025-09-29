@@ -4,7 +4,7 @@
 """
 Raspberry PiのGPIOを使用してIntel Hexファイルの内容を転送するプログラム
 GPIO 0-15: データバス（下位8ビット：アドレス、上位8ビット：データ）
-GPIO 16: Write Enable信号
+GPIO 16: /WE（Write Enable）信号 - アクティブLow（負論理）
 """
 
 import sys
@@ -21,6 +21,9 @@ from intel_hex_loader import IntelHexLoader, RecordType
 def output_byte_through_gpio(addr: int, data: int):
     """1バイトをGPIOを通じて送信する"""
     
+    # /WE信号をHigh（非アクティブ）に設定
+    GPIO.output(16, 1)
+    
     # アドレスの下位8ビットをGPIO 0-7に設定
     for i in range(8):
         GPIO.output(i, (addr >> i) & 1)
@@ -29,13 +32,13 @@ def output_byte_through_gpio(addr: int, data: int):
     for i in range(8):
         GPIO.output(i + 8, (data >> i) & 1)
     
-    # GPIO 16にWrite Enable信号設定
-    GPIO.output(16, 1)
+    # /WE信号をLow（アクティブ）に設定して書き込み
+    GPIO.output(16, 0)
     # 書き込み時間（マイクロ秒単位で調整可能）
     time.sleep(0.001)  # 1ms
     
-    # Write Enable信号をLowに設定
-    GPIO.output(16, 0)
+    # /WE信号をHigh（非アクティブ）に戻す
+    GPIO.output(16, 1)
     # 次の書き込みまでの待機時間
     time.sleep(0.001)  # 1ms
 
@@ -56,7 +59,10 @@ def main():
         # GPIO 0-16を出力モードに設定
         for i in range(17):
             GPIO.setup(i, GPIO.OUT)
-            GPIO.output(i, 0)  # 初期値はLow
+            if i == 16:
+                GPIO.output(i, 1)  # /WE信号の初期値はHigh（非アクティブ）
+            else:
+                GPIO.output(i, 0)  # その他の初期値はLow
         
         # Intel Hexファイルを読み込む
         loader = IntelHexLoader()
