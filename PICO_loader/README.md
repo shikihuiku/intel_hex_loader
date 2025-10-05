@@ -5,7 +5,7 @@ WindowsとRaspberry Pi PICOをシリアルポートで接続して、Intel Hex�
 ## 概要
 
 - Windows側でIntel Hexファイルを読み込み、USB CDC経由でPICOに転送
-- PICOはMicroPythonで動作し、受信したデータをGPIOに出力
+- PICOはCircuitPythonで動作し、受信したデータをGPIOに出力
 - 8ビットアドレス空間（0x00-0xFF）のみ対応
 
 ## システム構成
@@ -104,18 +104,88 @@ optional arguments:
 
 ## GPIO仕様
 
-| GPIO | 機能 | 説明 |
-|------|------|------|
-| 0-7 | アドレスバス | 8ビットアドレス（LSBがGPIO0） |
-| 8-15 | データバス | 8ビットデータ（LSBがGPIO8） |
-| 16 | /WE信号 | Write Enable（アクティブLow） |
+### ピンアサイン
+
+| 機能 | GPIO | 物理ピン | 説明 |
+|------|------|----------|------|
+| **アドレスバス** | | | |
+| A0 | GP0 | 1 | アドレスビット0（LSB） |
+| A1 | GP1 | 2 | アドレスビット1 |
+| A2 | GP2 | 4 | アドレスビット2 |
+| A3 | GP3 | 5 | アドレスビット3 |
+| A4 | GP4 | 6 | アドレスビット4 |
+| A5 | GP5 | 7 | アドレスビット5 |
+| A6 | GP6 | 9 | アドレスビット6 |
+| A7 | GP7 | 10 | アドレスビット7（MSB） |
+| **データバス** | | | |
+| D0 | GP8 | 11 | データビット0（LSB） |
+| D1 | GP9 | 12 | データビット1 |
+| D2 | GP10 | 14 | データビット2 |
+| D3 | GP11 | 15 | データビット3 |
+| D4 | GP12 | 16 | データビット4 |
+| D5 | GP13 | 17 | データビット5 |
+| D6 | GP14 | 19 | データビット6 |
+| D7 | GP15 | 20 | データビット7（MSB） |
+| **制御信号** | | | |
+| /WE | GP16 | 21 | Write Enable（アクティブLow） |
+
+### 物理ピン配置図
+```
+[Raspberry Pi Pico ピンアウト]
+         USB
+    ┌─────────┐
+A0─ │1  ●  40│ ─VBUS
+A1─ │2     39│ ─VSYS
+GND─│3     38│ ─GND
+A2─ │4     37│ ─3V3_EN
+A3─ │5     36│ ─3V3(OUT)
+A4─ │6     35│ ─ADC_VREF
+A5─ │7     34│ ─GP28
+GND─│8     33│ ─GND
+A6─ │9     32│ ─GP27
+A7─ │10    31│ ─GP26
+D0─ │11    30│ ─RUN
+D1─ │12    29│ ─GP22
+GND─│13    28│ ─GND
+D2─ │14    27│ ─GP21
+D3─ │15    26│ ─GP20
+D4─ │16    25│ ─GP19
+D5─ │17    24│ ─GP18
+GND─│18    23│ ─GND
+D6─ │19    22│ ─GP17
+D7─ │20    21│ ─/WE
+    └─────────┘
+```
+
+### 接続例（EEPROMやSRAMとの接続）
+```
+Pico              メモリIC
+GP0-7  ---------> A0-A7 (アドレスバス)
+GP8-15 <-------> D0-D7 (データバス - 双方向)
+GP16   ---------> /WE   (書き込み制御)
+GND    ---------> GND
+3V3    ---------> VCC
+```
 
 ### タイミング
-1. /WE信号をHigh（非アクティブ）に設定
-2. アドレスとデータを設定
-3. /WE信号をLow（アクティブ）に設定（10ms）
-4. /WE信号をHigh（非アクティブ）に戻す
-5. 次のデータまで10ms待機
+1. アドレスとデータを設定
+2. /WE信号をLow（アクティブ）に設定。LEDを点灯
+3. WEパルス幅だけ待機（デフォルト: 0.3ms）
+4. /WE信号をHigh（非アクティブ）に戻す。LEDを消灯
+5. 次の書き込みまでの待機時間（デフォルト: 0.3ms）
+
+
+### Write Enable パルス幅の調整
+```bash
+# デフォルト（0.3ms）
+python pico_serial_loader.py hexfile.hex
+
+# 高速転送（0.1ms）
+python pico_serial_loader.py hexfile.hex --pulse 0.1
+
+# 低速（視認可能、50ms）
+python pico_serial_loader.py hexfile.hex --pulse 50
+```
 
 ## トラブルシューティング
 
@@ -129,7 +199,7 @@ optional arguments:
 - PICOのファイルシステムにアクセスして、boot.pyの内容を確認してください
 
 ### 「USB CDC initialization failed」エラー
-- MicroPythonのバージョンを確認（v1.19以降推奨）
+- CircuitPythonのバージョンを確認（v7.0以降推奨）
 - boot.pyの内容が正しいか確認
 - PICOを完全にリセット（BOOTSELボタンを押しながら接続）
 

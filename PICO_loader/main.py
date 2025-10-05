@@ -1,24 +1,46 @@
 """
-Raspberry Pi PICO用 Intel Hex Loader (USB CDCバージョン)
-MicroPythonで動作し、USB CDC経由で受信したデータをGPIOに出力する
+Raspberry Pi PICO用 Intel Hex Loader (CircuitPython版)
+CircuitPythonで動作し、USB CDC経由で受信したデータをGPIOに出力する
 標準入出力とは独立してUSBシリアルを使用するため、print()でのデバッグが可能
 """
 
-import machine
+import board
+import digitalio
 import time
 import usb_cdc
 
-# GPIO設定
-ADDR_PINS = [0, 1, 2, 3, 4, 5, 6, 7]     # アドレスバス (GPIO 0-7)
-DATA_PINS = [8, 9, 10, 11, 12, 13, 14, 15]  # データバス (GPIO 8-15)
-WE_PIN = 16  # /WE (Write Enable) 信号 - Active Low
+# GPIO設定（CircuitPythonのboard定義を使用）
+ADDR_PINS = [board.GP0, board.GP1, board.GP2, board.GP3, 
+             board.GP4, board.GP5, board.GP6, board.GP7]     # アドレスバス
+DATA_PINS = [board.GP8, board.GP9, board.GP10, board.GP11,
+             board.GP12, board.GP13, board.GP14, board.GP15]  # データバス
+WE_PIN = board.GP16  # /WE (Write Enable) 信号 - Active Low
+LED_PIN = board.LED  # PICO内蔵LED
 
 # デバッグモード
 DEBUG = True  # USB CDCを使うので、print()でのデバッグが可能
 
+def error_led_blink(led_pin=LED_PIN, count=5, interval=1):
+    """エラー時のLED点滅パターン（共通関数）"""
+    led = digitalio.DigitalInOut(led_pin)
+    led.direction = digitalio.Direction.OUTPUT
+    for _ in range(count):
+        led.value = True  # LED点灯
+        time.sleep(interval)
+        led.value = False  # LED消灯
+        time.sleep(interval)
+
 class PicoHexLoader:
     def __init__(self):
         """GPIOとシリアル通信の初期化"""
+        # LEDの初期化
+        self.led = digitalio.DigitalInOut(LED_PIN)
+        self.led.direction = digitalio.Direction.OUTPUT
+        self.led.value = False  # LED消灯
+        
+        # Write Enable期間の設定（デフォルト: 0.3ms）
+        self.we_pulse_ms = 0.3
+        
         # USB CDCシリアルポートを取得
         try:
             if not usb_cdc.data:
@@ -28,6 +50,8 @@ class PicoHexLoader:
         except Exception as e:
             print(f"Error: USB CDC initialization failed: {e}")
             print("Please ensure boot.py contains: usb_cdc.enable(console=True, data=True)")
+            # エラー時はLEDを点滅させる
+            error_led_blink()
             raise
         
         # 受信バッファ
@@ -36,44 +60,53 @@ class PicoHexLoader:
         # アドレスバスの設定
         self.addr_pins = []
         for pin in ADDR_PINS:
-            p = machine.Pin(pin, machine.Pin.OUT)
-            p.value(0)
+            p = digitalio.DigitalInOut(pin)
+            p.direction = digitalio.Direction.OUTPUT
+            p.value = False
             self.addr_pins.append(p)
         
         # データバスの設定
         self.data_pins = []
         for pin in DATA_PINS:
-            p = machine.Pin(pin, machine.Pin.OUT)
-            p.value(0)
+            p = digitalio.DigitalInOut(pin)
+            p.direction = digitalio.Direction.OUTPUT
+            p.value = False
             self.data_pins.append(p)
         
         # /WE信号の設定（初期値はHigh = 非アクティブ）
-        self.we_pin = machine.Pin(WE_PIN, machine.Pin.OUT)
-        self.we_pin.value(1)
+        self.we_pin = digitalio.DigitalInOut(WE_PIN)
+        self.we_pin.direction = digitalio.Direction.OUTPUT
+        self.we_pin.value = True
         
         if DEBUG:
             print("[DEBUG] GPIO and USB CDC initialized")
     
+    
     def write_byte(self, address, data):
         """1バイトをGPIOに出力"""
-        # /WE信号をHigh（非アクティブ）にする
-        self.we_pin.value(1)
         
         # アドレスを設定
         for i in range(8):
-            self.addr_pins[i].value((address >> i) & 1)
+            self.addr_pins[i].value = bool((address >> i) & 1)
         
         # データを設定
         for i in range(8):
-            self.data_pins[i].value((data >> i) & 1)
+            self.data_pins[i].value = bool((data >> i) & 1)
         
+        # WEを有効にする前にAddressとDataを設定した後に、ほんの少しだけ待つ
+        time.sleep(0.001)
+
         # /WE信号をLow（アクティブ）にして書き込み
-        self.we_pin.value(0)
-        time.sleep_ms(10)  # 10ms待機
+        # WEが有効な間は、LEDを点灯させる
+        self.led.value = True
+        self.we_pin.value = False
+        time.sleep(self.we_pulse_ms / 1000.0)  # WEパルス幅
+        self.led.value = False
         
         # /WE信号をHigh（非アクティブ）に戻す
-        self.we_pin.value(1)
-        time.sleep_ms(10)  # 10ms待機
+        self.we_pin.value = True
+        # 次の書き込みまでの待機時間
+        time.sleep(self.we_pulse_ms / 1000.0)  # WEパルス幅
         
         if DEBUG:
             print(f"[DEBUG] Write: ADDR=0x{address:02X}, DATA=0x{data:02X}, /WE=0 (active)")
@@ -88,6 +121,27 @@ class PicoHexLoader:
                 return {'cmd': line}
             else:
                 return {'error': 'COMMAND', 'message': f'Unknown command: {line}'}
+        
+        # Timingコマンド（WE期間設定）
+        if line.startswith('T:'):
+            try:
+                parts = line.split(':', 1)
+                if len(parts) != 2:
+                    return {'error': 'FORMAT', 'message': 'Invalid timing format'}
+                
+                pulse_ms = float(parts[1])
+                
+                # 範囲チェック（0.1-1000ms）
+                if not (0.1 <= pulse_ms <= 1000):
+                    return {'error': 'RANGE', 'message': 'Timing must be 0.1-1000ms'}
+                
+                return {
+                    'cmd': 'T',
+                    'pulse_ms': pulse_ms
+                }
+                
+            except Exception as e:
+                return {'error': 'FORMAT', 'message': str(e)}
         
         # Writeコマンド
         if line.startswith('W:'):
@@ -189,14 +243,23 @@ class PicoHexLoader:
         print("PICO Hex Loader (USB CDC) started")
         self.send_response("OK", "READY")
         
+        # 待機中はLEDを点灯
+        self.led.value = True
+        
         while True:
             try:
+                # 待機中はLEDを点灯
+                self.led.value = True
+                
                 # シリアルからの入力を読み込む（ノンブロッキング）
                 line = self.read_line()
                 if not line:
                     # データがない場合は少し待つ
-                    time.sleep_ms(10)
+                    time.sleep(0.01)
                     continue
+                
+                # コマンドを受信したらLEDを消灯（処理中）
+                self.led.value = False
                 
                 if DEBUG:
                     print(f"[DEBUG] Received: {line}")
@@ -214,6 +277,13 @@ class PicoHexLoader:
                 if cmd == 'P':
                     self.send_response("OK", "READY")
                 
+                elif cmd == 'T':
+                    # タイミング設定
+                    self.we_pulse_ms = result['pulse_ms']
+                    if DEBUG:
+                        print(f"[DEBUG] Timing set: pulse={self.we_pulse_ms}ms")
+                    self.send_response("OK", f"TIMING:{self.we_pulse_ms}")
+                
                 elif cmd == 'W':
                     self.handle_write_command(
                         result['start_address'],
@@ -225,8 +295,8 @@ class PicoHexLoader:
                     self.send_response("OK", "END")
                     # 必要に応じてGPIOをリセット
                     for pin in self.addr_pins + self.data_pins:
-                        pin.value(0)
-                    self.we_pin.value(1)
+                        pin.value = False
+                    self.we_pin.value = True
                 
             except Exception as e:
                 if DEBUG:
@@ -236,5 +306,11 @@ class PicoHexLoader:
 
 # メイン実行
 if __name__ == "__main__":
-    loader = PicoHexLoader()
-    loader.run()
+    try:
+        loader = PicoHexLoader()
+        loader.run()
+    except Exception as e:
+        # 初期化エラーの場合、LEDで通知（CDCが使えない場合に備えて）
+        print(f"Error: {e}")
+        # 高速点滅でエラーを示す
+        error_led_blink(LED_PIN, count=20, interval=0.3)

@@ -1,5 +1,6 @@
 """
 Raspberry Pi PICO boot.py
+CircuitPython環境用の起動設定
 USB CDCを有効化してデータ通信用のシリアルポートを作成
 """
 
@@ -13,3 +14,5 @@ usb_cdc.enable(console=True, data=True)
 
 # ストレージを読み取り専用にする場合はコメントを外す
 # storage.remount("/", readonly=False)
+
+print("PICO Boot: CircuitPython Ready")
